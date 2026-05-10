@@ -1,38 +1,39 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from elasticsearch import Elasticsearch
+import requests
 
 app = FastAPI()
 
-# React Dashboard se baat karne ke liye CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Development ke liye sab allowed hai
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Elasticsearch Connection
-# Note: Humne downgrade kiya hai taaki compatibility bani rahe
-es = Elasticsearch(["http://localhost:9200"])
+ELASTICSEARCH_URL = "http://localhost:9200/filebeat-*/_search"
 
 @app.get("/")
 def home():
-    return {"status": "IDPC Backend is Running"}
+    return {"status": "Backend is Running"}
 
 @app.get("/fetch-alerts")
 def fetch_alerts():
     try:
-        # Latest alerts ko sabse upar dikhane ke liye 'descending' sort
-        response = es.search(
-            index="filebeat-*",
-            body={
-                "query": {"match_all": {}},
-                "sort": [{"@timestamp": {"order": "desc"}}]
-            },
-            size=10
-        )
-        return response['hits']['hits']
+        # We use simple requests to bypass the library errors
+        response = requests.get(ELASTICSEARCH_URL)
+        data = response.json()
+        
+        alerts = []
+        for hit in data.get('hits', {}).get('hits', []):
+            s = hit.get('_source', {})
+            alerts.append({
+                "timestamp": s.get("@timestamp") or s.get("timestamp"),
+                "alert_message": s.get("alert_message") or s.get("message", "Security Alert"),
+                "source_ip": s.get("source_ip") or s.get("ip", "127.0.0.1"),
+                "severity": s.get("severity", "High")
+            })
+        return alerts
     except Exception as e:
         return {"error": str(e)}
 

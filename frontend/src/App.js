@@ -3,7 +3,6 @@ import React, { useState, useEffect } from 'react';
 function App() {
   const [alerts, setAlerts] = useState([]);
 
-  // Backend se data khichne wala function
   const fetchAlerts = async () => {
     try {
       const response = await fetch('http://127.0.0.1:8000/fetch-alerts');
@@ -16,7 +15,7 @@ function App() {
 
   useEffect(() => {
     fetchAlerts();
-    const interval = setInterval(fetchAlerts, 5000); // Har 5 sec mein update hoga
+    const interval = setInterval(fetchAlerts, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -35,12 +34,16 @@ function App() {
         <tbody>
           {alerts.length > 0 ? alerts.map((alert, index) => (
             <tr key={index}>
-              <td>{alert._source['@timestamp']}</td>
-              <td>{alert._source.message || "Potential Intrusion Detected"}</td>
-              <td>{alert._source.source?.ip || "Internal"}</td>
-              <td style={{ color: 'red' }}>HIGH</td>
+              <td>{alert.timestamp || "N/A"}</td>
+              <td>{alert.alert_message || "Security Alert"}</td>
+              <td>{alert.source_ip || "127.0.0.1"}</td>
+              <td style={{ color: alert.severity === 'High' ? 'red' : 'yellow' }}>
+                {alert.severity || "Medium"}
+              </td>
             </tr>
-          )) : <tr><td colSpan="4">Waiting for incoming threats...</td></tr>}
+          )) : (
+            <tr><td colSpan="4">Waiting for incoming threats...</td></tr>
+          )}
         </tbody>
       </table>
     </div>
