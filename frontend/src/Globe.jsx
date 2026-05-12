@@ -1,72 +1,61 @@
-import React, { useRef } from "react";
+import React, { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Stars, Float } from "@react-three/drei";
+import { Stars, useTexture } from "@react-three/drei";
 
 export default function Globe() {
   const globeRef = useRef();
   const pointsRef = useRef();
 
-  // Slow rotation to simulate a surveillance satellite view
-  useFrame((state, delta) => {
-    if (globeRef.current) globeRef.current.rotation.y += delta * 0.15;
-    if (pointsRef.current) pointsRef.current.rotation.y += delta * 0.15;
-  });
+  // 1. High-contrast Earth Texture
+  const earthTexture = useTexture('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg');
 
-  // Generate random threat points across the globe surface
-  const threatPoints = [...Array(20)].map(() => {
+  // 2. Reduce points to 10 for maximum performance in VirtualBox
+  const threatPoints = useMemo(() => [...Array(10)].map(() => {
     const phi = Math.acos(-1 + Math.random() * 2);
     const theta = Math.random() * Math.PI * 2;
     return [
-      2.3 * Math.sin(phi) * Math.cos(theta),
-      2.3 * Math.sin(phi) * Math.sin(theta),
-      2.3 * Math.cos(phi)
+      2.22 * Math.sin(phi) * Math.cos(theta),
+      2.22 * Math.sin(phi) * Math.sin(theta),
+      2.22 * Math.cos(phi)
     ];
+  }), []);
+
+  useFrame((state, delta) => {
+    const speed = delta * 0.15;
+    if (globeRef.current) globeRef.current.rotation.y += speed;
+    if (pointsRef.current) pointsRef.current.rotation.y += speed;
   });
 
   return (
     <group>
-      {/* Deep Space Atmosphere */}
-      <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+      {/* Dim the stars so the globe is the focus */}
+      <Stars radius={100} depth={10} count={500} factor={1} fade speed={0.5} />
       
-      <Float speed={1.5} rotationIntensity={0.5} floatIntensity={0.5}>
-        {/* Main Holographic Globe Shell */}
-        <mesh ref={globeRef}>
-          <sphereGeometry args={[2.2, 64, 64]} />
-          <meshPhongMaterial
-            color="#1e40af"
-            emissive="#3b82f6"
-            emissiveIntensity={0.5}
-            wireframe
-            transparent
-            opacity={0.2}
-          />
-        </mesh>
+      <mesh ref={globeRef}>
+        <sphereGeometry args={[2.2, 32, 32]} />
+        <meshStandardMaterial 
+          map={earthTexture} 
+          emissive="#224488" // Creates a blue "inner glow" so it stands out from black
+          emissiveIntensity={0.6}
+          roughness={0.5}
+          metalness={0.5}
+        />
+      </mesh>
 
-        {/* Inner Solid Core */}
-        <mesh>
-          <sphereGeometry args={[2.15, 64, 64]} />
-          <meshPhongMaterial
-            color="#05070a"
-            transparent
-            opacity={0.8}
-          />
-        </mesh>
+      {/* Brighter Threat Points */}
+      <group ref={pointsRef}>
+        {threatPoints.map((pos, i) => (
+          <mesh key={i} position={pos}>
+            <sphereGeometry args={[0.06, 8, 8]} />
+            <meshBasicMaterial color="#ff2222" />
+            <pointLight distance={0.4} intensity={5} color="#ff0000" />
+          </mesh>
+        ))}
+      </group>
 
-        {/* Active Threat Points */}
-        <group ref={pointsRef}>
-          {threatPoints.map((pos, i) => (
-            <mesh key={i} position={pos}>
-              <sphereGeometry args={[0.04, 16, 16]} />
-              <meshBasicMaterial color="#ef4444" />
-              <pointLight distance={0.5} intensity={2} color="#ef4444" />
-            </mesh>
-          ))}
-        </group>
-      </Float>
-
-      {/* Global Illumination */}
-      <ambientLight intensity={0.5} />
-      <pointLight position={[10, 10, 10]} intensity={1} color="#3b82f6" />
+      {/* Increased light intensity to stop the 'mixing' with background */}
+      <ambientLight intensity={1.2} />
+      <directionalLight position={[5, 3, 5]} intensity={1.5} />
     </group>
   );
 }
