@@ -1,61 +1,108 @@
-import React, { useRef, useMemo } from "react";
+import React, { useRef, useMemo, useState } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Stars, useTexture } from "@react-three/drei";
+import { Stars, useTexture, Line, Html } from "@react-three/drei";
+import * as THREE from "three";
 
 export default function Globe() {
   const globeRef = useRef();
   const pointsRef = useRef();
-
-  // 1. High-contrast Earth Texture
+  const [hovered, setHovered] = useState(null);
+  
   const earthTexture = useTexture('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg');
 
-  // 2. Reduce points to 10 for maximum performance in VirtualBox
-  const threatPoints = useMemo(() => [...Array(10)].map(() => {
-    const phi = Math.acos(-1 + Math.random() * 2);
-    const theta = Math.random() * Math.PI * 2;
-    return [
-      2.22 * Math.sin(phi) * Math.cos(theta),
-      2.22 * Math.sin(phi) * Math.sin(theta),
-      2.22 * Math.cos(phi)
-    ];
-  }), []);
+  const { threatData, arcs } = useMemo(() => {
+    const points = [...Array(6)].map((_, i) => {
+      const phi = Math.acos(-1 + Math.random() * 2);
+      const theta = Math.random() * Math.PI * 2;
+      return {
+        id: i,
+        pos: [2.22 * Math.sin(phi) * Math.cos(theta), 2.22 * Math.sin(phi) * Math.sin(theta), 2.22 * Math.cos(phi)],
+        ip: `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.x.x`
+      };
+    });
+
+    const target = new THREE.Vector3(0, 2.22, 0); 
+    const arcLines = points.map(p => {
+      const start = new THREE.Vector3(...p.pos);
+      const mid = start.clone().lerp(target, 0.5).normalize().multiplyScalar(3.6); 
+      const curve = new THREE.QuadraticBezierCurve3(start, mid, target);
+      return curve.getPoints(32);
+    });
+
+    return { threatData: points, arcs: arcLines };
+  }, []);
 
   useFrame((state, delta) => {
-    const speed = delta * 0.15;
+    const speed = delta * 0.1;
     if (globeRef.current) globeRef.current.rotation.y += speed;
     if (pointsRef.current) pointsRef.current.rotation.y += speed;
+    
+    pointsRef.current.children.forEach((child, i) => {
+      if (child.type === "Group") {
+        const pulse = 1 + Math.sin(state.clock.elapsedTime * 4 + i) * 0.2;
+        child.children[0].scale.set(pulse, pulse, pulse);
+      }
+    });
   });
 
   return (
-    <group>
-      {/* Dim the stars so the globe is the focus */}
-      <Stars radius={100} depth={10} count={500} factor={1} fade speed={0.5} />
+    <group position={[0, -0.4, 0]} scale={0.75}> {/* Reduced scale and lowered position for better fit */}
+      <Stars radius={100} depth={5} count={200} factor={1} fade />
       
       <mesh ref={globeRef}>
-        <sphereGeometry args={[2.2, 32, 32]} />
+        <sphereGeometry args={[2.2, 48, 48]} />
         <meshStandardMaterial 
           map={earthTexture} 
-          emissive="#224488" // Creates a blue "inner glow" so it stands out from black
-          emissiveIntensity={0.6}
-          roughness={0.5}
-          metalness={0.5}
+          emissive="#1a2a4a" 
+          emissiveIntensity={0.4} 
+          metalness={0.2} 
+          roughness={0.7} 
         />
       </mesh>
 
-      {/* Brighter Threat Points */}
       <group ref={pointsRef}>
-        {threatPoints.map((pos, i) => (
-          <mesh key={i} position={pos}>
-            <sphereGeometry args={[0.06, 8, 8]} />
-            <meshBasicMaterial color="#ff2222" />
-            <pointLight distance={0.4} intensity={5} color="#ff0000" />
-          </mesh>
+        {threatData.map((data, i) => (
+          <group key={data.id}>
+            <mesh 
+              position={data.pos}
+              onPointerOver={() => setHovered(data)}
+              onPointerOut={() => setHovered(null)}
+            >
+              <sphereGeometry args={[0.07, 12, 12]} />
+              <meshBasicMaterial color={hovered?.id === data.id ? "#ffffff" : "#b30000"} />
+              
+              {hovered?.id === data.id && (
+                <Html distanceFactor={10} position={[0, 0.4, 0]}>
+                  <div style={{ 
+                    background: 'rgba(5, 5, 10, 0.95)', 
+                    color: '#ff4444', 
+                    padding: '8px 12px', 
+                    borderRadius: '2px', 
+                    border: '1px solid #8b0000',
+                    backdropFilter: 'blur(10px)',
+                    fontSize: '10px',
+                    fontFamily: 'monospace'
+                  }}>
+                    SRC_IP: {data.ip}
+                  </div>
+                </Html>
+              )}
+            </mesh>
+
+            <Line 
+              points={arcs[i]} 
+              color="#8b0000" 
+              lineWidth={1.5} 
+              transparent 
+              opacity={0.5} 
+            />
+          </group>
         ))}
       </group>
 
-      {/* Increased light intensity to stop the 'mixing' with background */}
-      <ambientLight intensity={1.2} />
-      <directionalLight position={[5, 3, 5]} intensity={1.5} />
+      <ambientLight intensity={0.8} /> 
+      <directionalLight position={[10, 10, 5]} intensity={1.5} color="#ffffff" />
+      <pointLight position={[-10, -5, 5]} intensity={1.2} color="#224488" />
     </group>
   );
 }
