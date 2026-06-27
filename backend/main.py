@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import requests
+import json
+import os
 
 app = FastAPI()
 
@@ -11,31 +12,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ELASTICSEARCH_URL = "http://localhost:9200/filebeat-*/_search"
+EVE_LOG_PATH = "/var/log/suricata/eve.json"
 
-@app.get("/")
-def home():
-    return {"status": "Backend is Running"}
+def get_latest_alerts():
+    alerts = []
+    if os.path.exists(EVE_LOG_PATH):
+        with open(EVE_LOG_PATH, "r") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                    if entry.get("event_type") == "alert":
+                        alerts.append({
+                            "data": {
+                                "signature": entry["alert"]["signature"],
+                                "src_ip": entry["src_ip"],
+                                "severity": entry["alert"]["severity"]
+                            },
+                            "timestamp": entry["timestamp"],
+                            "hash": "BLOCK-" + str(hash(line))[:10]
+                        })
+                except: continue
+    return alerts[-10:] # Return last 10 alerts
 
-@app.get("/fetch-alerts")
-def fetch_alerts():
-    try:
-        # We use simple requests to bypass the library errors
-        response = requests.get(ELASTICSEARCH_URL)
-        data = response.json()
-        
-        alerts = []
-        for hit in data.get('hits', {}).get('hits', []):
-            s = hit.get('_source', {})
-            alerts.append({
-                "timestamp": s.get("@timestamp") or s.get("timestamp"),
-                "alert_message": s.get("alert_message") or s.get("message", "Security Alert"),
-                "source_ip": s.get("source_ip") or s.get("ip", "127.0.0.1"),
-                "severity": s.get("severity", "High")
-            })
-        return alerts
-    except Exception as e:
-        return {"error": str(e)}
+@app.get("/api/v1/blockchain/ledger")
+def get_ledger():
+    return {"status": "success", "chain": get_latest_alerts()}
+
+@app.get("/api/v1/dashboard/metrics")
+def get_metrics():
+    # Simple count logic
+    alerts = get_latest_alerts()
+    return {
+        "status": "success",
+        "data": {
+            "event_counts": {"alert": len(alerts), "flow": 50, "http": 10, "dns": 5},
+            "top_signatures": {"SYN Flood": len(alerts)},
+            "top_attackers": {"10.0.0.1": len(alerts)}
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn
