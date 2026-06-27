@@ -1,0 +1,11 @@
+[
+    {
+        "index": 0,
+        "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "timestamp": "2026-06-15 00:00:00",
+        "data": {
+            "message": "IDPC-Sentinel Genesis Audit Block Locked."
+        },
+        "hash": "00d04183bd801d0488f22b26563ad9d0e9c102fa86a6cbf9c3ae7ac46afa462e"
+    }
+]
