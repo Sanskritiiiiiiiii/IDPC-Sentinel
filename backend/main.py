@@ -12,6 +12,7 @@ IDPS Sentinel - Backend
 import asyncio
 import hashlib
 import random
+import socket
 import time
 from datetime import datetime, timezone
 
@@ -49,28 +50,34 @@ STATE = {
     ],
 }
 
-ALERT_SEVERITIES = ["low", "medium", "high", "critical"]
-ALERT_TYPES = [
-    "Port Scan Detected",
-    "Anomalous Packet Burst",
-    "Suspicious Protocol Behavior",
-    "Repeated Connection Failures",
-    "Unusual Source Geolocation",
-]
-
 MAX_ALERTS = 50
 MAX_BLOCKS = 200
+FLOOD_THRESHOLD_PPS = 1500
 
 # baseline for real network delta measurement (psutil.net_io_counters is
 # cumulative since boot, so we diff it against the previous tick)
 _last_net_io = psutil.net_io_counters()
 _last_net_time = time.monotonic()
 
+# psutil.cpu_percent() reports usage since its *previous* call, so prime it
+# once here; every call inside the loop afterward gives a real delta.
+psutil.cpu_percent()
 
-def _random_ip() -> str:
-    """Generate a plausible-looking public IPv4 address."""
-    first = random.choice([203, 45, 88, 112, 61, 178, 91, 130])
-    return f"{first}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+# edge-trigger flag so a sustained flood only raises one alert, not one
+# every 0.5s tick while traffic stays above threshold
+_flood_alert_active = False
+
+
+def _local_ip() -> str:
+    """Best-effort real, non-loopback IPv4 address of this host."""
+    try:
+        for addrs in psutil.net_if_addrs().values():
+            for addr in addrs:
+                if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                    return addr.address
+    except Exception:
+        pass
+    return "127.0.0.1"
 
 
 def _genesis_block() -> dict:
@@ -122,34 +129,44 @@ def _tick_metrics() -> None:
     _last_net_io = current_io
     _last_net_time = now
 
-    m["active_connections"] = max(0, m["active_connections"] + random.randint(-15, 20))
+    try:
+        m["active_connections"] = len(psutil.net_connections())
+    except Exception:
+        pass  # keep previous value if the platform denies this call
+
     m["cpu_load_pct"] = round(min(99.0, max(3.0, m["cpu_load_pct"] + random.uniform(-3, 3))), 1)
 
     # threat score now drifts off the real packet rate instead of a
     # synthetic spike flag
-    drift = random.uniform(-2, 2) + (6 if m["packets_per_sec"] > 1500 else -1)
+    drift = random.uniform(-2, 2) + (6 if m["packets_per_sec"] > FLOOD_THRESHOLD_PPS else -1)
     m["threat_score"] = int(min(100, max(0, m["threat_score"] + drift)))
 
     m["last_updated"] = datetime.now(timezone.utc).isoformat()
 
 
 def _maybe_raise_alert() -> None:
-    """Randomly emit an alert, biased toward firing during packet spikes."""
+    """Fire one high-severity flood alert when real packets_per_sec crosses
+    the threshold; reset once traffic falls back below it (edge-triggered,
+    so a sustained flood doesn't spam an alert every tick)."""
+    global _flood_alert_active
     m = STATE["metrics"]
-    base_chance = 0.03
-    if m["packets_per_sec"] > 1500:
-        base_chance = 0.35
 
-    if random.random() >= base_chance:
+    if m["packets_per_sec"] <= FLOOD_THRESHOLD_PPS:
+        _flood_alert_active = False
         return
 
-    severity = random.choice(ALERT_SEVERITIES)
-    source_ip = _random_ip()
+    if _flood_alert_active:
+        return  # already reported this ongoing flood
+
+    _flood_alert_active = True
+    host_ip = _local_ip()
+    severity = "high"
     alert = {
         "id": f"alt-{int(time.time() * 1000)}-{random.randint(100, 999)}",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "source_ip": source_ip,
-        "type": random.choice(ALERT_TYPES),
+        "source_ip": host_ip,
+        "dest_ip": host_ip,
+        "type": "UDP/TCP Traffic Flood Detected",
         "severity": severity,
         "status": "open",
     }
@@ -158,22 +175,27 @@ def _maybe_raise_alert() -> None:
         STATE["alerts"].pop()
 
     # high/critical alerts count as a block and bump blocked_ips_count
-    if severity in ("high", "critical"):
-        STATE["metrics"]["blocked_ips_count"] += 1
-        block = _new_block({
-            "event": "ip_blocked",
-            "source_ip": source_ip,
-            "severity": severity,
-            "alert_id": alert["id"],
-        })
-        STATE["blockchain"].append(block)
-        if len(STATE["blockchain"]) > MAX_BLOCKS:
-            STATE["blockchain"].pop(0)
+    STATE["metrics"]["blocked_ips_count"] += 1
+    block = _new_block({
+        "event": "traffic_flood_detected",
+        "source_ip": host_ip,
+        "severity": severity,
+        "alert_id": alert["id"],
+        "packets_per_sec": m["packets_per_sec"],
+    })
+    STATE["blockchain"].append(block)
+    if len(STATE["blockchain"]) > MAX_BLOCKS:
+        STATE["blockchain"].pop(0)
 
 
 def _tick_nodes() -> None:
     for node in STATE["nodes"]:
-        node["load_pct"] = round(min(99.0, max(2.0, node["load_pct"] + random.uniform(-4, 4))), 1)
+        if node["id"] == "node-gateway":
+            # Core Gateway node reflects real host CPU utilization
+            node["load_pct"] = round(psutil.cpu_percent(), 1)
+        else:
+            # edge nodes stay simulated network endpoints
+            node["load_pct"] = round(min(99.0, max(2.0, node["load_pct"] + random.uniform(-4, 4))), 1)
 
 
 async def background_worker() -> None:
