@@ -1,14 +1,12 @@
 """
 IDPS Sentinel - Backend
-Milestone 1: Baseline Backend Setup
 
 - Global STATE dict (metrics, alerts, blockchain ledger, nodes, asset guard)
-- Single asyncio background task fluctuates STATE every 0.5s
-- Static REST GET routes expose current STATE snapshot
-
-Deliberately lean: no DB, no auth, no extra libs beyond FastAPI/uvicorn.
-Everything lives in-memory in STATE. This is the foundation Milestone 2
-will stream over a WebSocket instead of polling.
+- Background asyncio task ticks STATE every 0.5s
+- packets_per_sec / bandwidth_mbps are pulled from real host NIC counters
+  via psutil.net_io_counters(); everything else remains lightweight
+  simulated telemetry
+- Static REST GET routes + a WebSocket route expose the current STATE
 """
 
 import asyncio
@@ -17,6 +15,7 @@ import random
 import time
 from datetime import datetime, timezone
 
+import psutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -62,9 +61,10 @@ ALERT_TYPES = [
 MAX_ALERTS = 50
 MAX_BLOCKS = 200
 
-# in-flight "spike" state so packets/sec moves in realistic bursts rather
-# than pure random noise every tick
-_spike_ticks_remaining = 0
+# baseline for real network delta measurement (psutil.net_io_counters is
+# cumulative since boot, so we diff it against the previous tick)
+_last_net_io = psutil.net_io_counters()
+_last_net_time = time.monotonic()
 
 
 def _random_ip() -> str:
@@ -100,29 +100,34 @@ def _new_block(event_data: dict) -> dict:
 
 
 def _tick_metrics() -> None:
-    """Advance packets/sec with occasional spikes, plus jitter on the rest."""
-    global _spike_ticks_remaining
+    """Pull real packets/sec + bandwidth from the host NIC counters; keep
+    the remaining fields as lightweight simulated telemetry."""
+    global _last_net_io, _last_net_time
     m = STATE["metrics"]
 
-    if _spike_ticks_remaining > 0:
-        target = random.randint(2500, 5000)
-        _spike_ticks_remaining -= 1
-    else:
-        target = random.randint(180, 260)
-        # ~4% chance per tick to enter a spike window
-        if random.random() < 0.04:
-            _spike_ticks_remaining = random.randint(4, 10)
+    current_io = psutil.net_io_counters()
+    now = time.monotonic()
+    dt = max(now - _last_net_time, 0.001)  # guard against div-by-zero
 
-    # smooth toward target instead of jumping, so the graph looks organic
-    m["packets_per_sec"] = int(m["packets_per_sec"] + (target - m["packets_per_sec"]) * 0.5)
-    m["packets_per_sec"] = max(0, m["packets_per_sec"])
+    packets_delta = (current_io.packets_sent + current_io.packets_recv) - (
+        _last_net_io.packets_sent + _last_net_io.packets_recv
+    )
+    bytes_delta = (current_io.bytes_sent + current_io.bytes_recv) - (
+        _last_net_io.bytes_sent + _last_net_io.bytes_recv
+    )
 
-    m["bandwidth_mbps"] = round(max(0.5, m["packets_per_sec"] * 0.0065 + random.uniform(-1, 1)), 2)
+    m["packets_per_sec"] = max(0, int(packets_delta / dt))
+    m["bandwidth_mbps"] = round(max(0.0, (bytes_delta * 8 / 1_000_000) / dt), 2)
+
+    _last_net_io = current_io
+    _last_net_time = now
+
     m["active_connections"] = max(0, m["active_connections"] + random.randint(-15, 20))
     m["cpu_load_pct"] = round(min(99.0, max(3.0, m["cpu_load_pct"] + random.uniform(-3, 3))), 1)
 
-    # threat score drifts, but leans higher while a packet spike is active
-    drift = random.uniform(-2, 2) + (6 if _spike_ticks_remaining > 0 else -1)
+    # threat score now drifts off the real packet rate instead of a
+    # synthetic spike flag
+    drift = random.uniform(-2, 2) + (6 if m["packets_per_sec"] > 1500 else -1)
     m["threat_score"] = int(min(100, max(0, m["threat_score"] + drift)))
 
     m["last_updated"] = datetime.now(timezone.utc).isoformat()
