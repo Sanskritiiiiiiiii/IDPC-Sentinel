@@ -20,6 +20,11 @@ import psutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+# Architectural bridges to the planned AI + Hyperledger layers. Swap these
+# imports for the real modules later — see the docstring in each mock file.
+from ai_engine_mock import predict_attack
+from blockchain_logger_mock import record_attack_event
+
 # ---------------------------------------------------------------------------
 # GLOBAL STATE
 # ---------------------------------------------------------------------------
@@ -160,6 +165,18 @@ def _maybe_raise_alert() -> None:
     if _flood_alert_active:
         return  # already reported this ongoing flood
 
+    # --- AI Detection & Behavioral Analysis Layer bridge ---
+    # Feed the real threshold-crossing traffic into the model for
+    # confirmation, matching the blueprint's detection flow. The mock
+    # always confirms True today; a real model may veto false positives.
+    packet_data = {
+        "packets_per_sec": m["packets_per_sec"],
+        "bandwidth_mbps": m["bandwidth_mbps"],
+        "active_connections": m["active_connections"],
+    }
+    if not predict_attack(packet_data):
+        return  # AI layer did not confirm this as an attack
+
     _flood_alert_active = True
     host_ip = _local_ip()
     severity = "high"
@@ -205,6 +222,13 @@ def _maybe_raise_alert() -> None:
     STATE["blockchain"].append(block)
     if len(STATE["blockchain"]) > MAX_BLOCKS:
         STATE["blockchain"].pop(0)
+
+    # --- Blockchain Logging & Security Ledger layer bridge ---
+    # Mirrors the same event to the (eventual) Hyperledger Fabric ledger.
+    # The internal STATE["blockchain"] hash-chain above remains the live
+    # local ledger the dashboard reads from; this call is the bridge point
+    # for the real distributed ledger described in the blueprint.
+    record_attack_event(block["data"])
 
 
 def _tick_nodes() -> None:
