@@ -38,6 +38,7 @@ STATE = {
     },
     "alerts": [],        # most recent first, capped list
     "blockchain": [],    # append-only ledger, index 0 = genesis
+    "blocked_ips": [],   # active mitigation / null-route list, most recent first
     "nodes": [
         {"id": "node-alpha", "name": "Edge Node Alpha", "status": "online", "load_pct": 22.0},
         {"id": "node-beta", "name": "Edge Node Beta", "status": "online", "load_pct": 31.0},
@@ -52,6 +53,7 @@ STATE = {
 
 MAX_ALERTS = 50
 MAX_BLOCKS = 200
+MAX_BLOCKED_IPS = 200
 FLOOD_THRESHOLD_PPS = 1500
 
 # baseline for real network delta measurement (psutil.net_io_counters is
@@ -168,20 +170,37 @@ def _maybe_raise_alert() -> None:
         "dest_ip": host_ip,
         "type": "UDP/TCP Traffic Flood Detected",
         "severity": severity,
-        "status": "open",
+        "status": "detected",
     }
     STATE["alerts"].insert(0, alert)
     if len(STATE["alerts"]) > MAX_ALERTS:
         STATE["alerts"].pop()
 
-    # high/critical alerts count as a block and bump blocked_ips_count
-    STATE["metrics"]["blocked_ips_count"] += 1
+    # --- automated response: null-route the offending IP ---
+    block_entry = {
+        "ip": host_ip,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "reason": "UDP/TCP Traffic Flood Detected",
+        "alert_id": alert["id"],
+        "action": "null-routed",
+    }
+    STATE["blocked_ips"].insert(0, block_entry)
+    if len(STATE["blocked_ips"]) > MAX_BLOCKED_IPS:
+        STATE["blocked_ips"].pop()
+
+    # mutate the same alert object in place so the dashboard sees it flip
+    # from "detected" to "blocked" once mitigation has been applied
+    alert["status"] = "blocked"
+
+    STATE["metrics"]["blocked_ips_count"] = len(STATE["blocked_ips"])
+
     block = _new_block({
         "event": "traffic_flood_detected",
         "source_ip": host_ip,
         "severity": severity,
         "alert_id": alert["id"],
         "packets_per_sec": m["packets_per_sec"],
+        "action": "null-routed",
     })
     STATE["blockchain"].append(block)
     if len(STATE["blockchain"]) > MAX_BLOCKS:
